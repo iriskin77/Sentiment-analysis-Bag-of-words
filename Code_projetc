@@ -1,0 +1,68 @@
+import matplotlib.pyplot as plt
+from keras.models import Sequential
+from keras.layers import Dense, Dropout
+from keras.optimizers import RMSprop
+from keras.preprocessing.text import Tokenizer, text_to_word_sequence
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import normalize
+
+
+
+def delete_new_line_symbols(text):
+    text = text.replace('\n', ' ')
+    return text
+
+def get_model():
+    model = Sequential()
+
+    model.add(Dense(32, activation='relu'))
+    model.add(Dropout(0.3))
+    model.add(Dense(16, activation='relu'))
+    model.add(Dropout(0.3))
+    model.add(Dense(16, activation='relu'))
+    model.add(Dense(1, activation='sigmoid'))
+
+    model.compile(optimizer=RMSprop(lr=0.0001),
+                  loss='binary_crossentropy',
+                  metrics=['accuracy'])
+
+    return model
+
+path = r'C:\Users\C`est_moi\Desktop\12.xlsx'
+
+df = pd.read_excel(path, index_col=False)
+# df = df.set_index([pd.Index([i for i in len(df)*'a'])])
+
+print(df['comments'])
+target = df['on_topic']
+
+tokenizer = Tokenizer(num_words=15000, filters='!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n',
+                      lower=True,
+                      split=' ',
+                      char_level=False)
+
+tokenizer.fit_on_texts(df['comments'])
+matrix = tokenizer.texts_to_matrix(df['comments'], mode='count')
+print(matrix.shape)
+
+X = normalize(matrix)
+y = target
+
+X_train, X_test, y_train, y_test = train_test_split(X,
+                                                    y,
+                                                    test_size=0.2)
+
+model = get_model()
+
+history = model.fit(X_train,
+                    y_train,
+                    epochs=150,
+                    batch_size=500,
+                    validation_data=(X_test, y_test))
+
+model.save(r'C:\Users\C`est_moi\Desktop\проект Python\Keras\topic.h5')
+
+plt.plot(history.history['accuracy'])
+plt.grid(True)
+plt.show()
