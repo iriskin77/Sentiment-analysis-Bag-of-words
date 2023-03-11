@@ -1,0 +1,195 @@
+from nltk.corpus import PlaintextCorpusReader
+from nltk.probability  import FreqDist
+from nltk import bigrams
+from nltk import pos_tag
+from collections import OrderedDict
+from collections import defaultdict
+from sklearn.metrics import classification_report, accuracy_score
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.model_selection import GridSearchCV
+from sklearn.utils import shuffle
+from scipy.sparse import csr_matrix
+from pymystem3 import Mystem
+import numpy as np
+import pandas as pd  
+
+
+class Vectorization:
+
+    def labeled_data(self, dct_from_preproccessing):
+        # Создание помеченный данных со структурой:
+        # [([список слов отзыва], метка_класса)]
+        labels = ['good', 'neutral', 'bad']
+        labeled_data = []
+        for label in labels:
+            for document in dct_from_preproccessing[label]['Word_matrix']:
+                labeled_data.append((document, label))
+        return labeled_data
+
+
+    def unique_words(self, dct_from_preproccessing):
+        # Создание вокабуляра с уникальными лексемами
+        labels = ['good', 'neutral', 'bad']
+        all_words = []
+        for label in labels:
+            frequency = FreqDist(dct_from_preproccessing[label]['All_words'])
+            common_words = frequency.most_common(50)
+            words = [i[0] for i in common_words]
+            all_words.extend(words)
+            # Извлечение уникальных лексем
+            unique_words = list(OrderedDict.fromkeys(all_words))
+        return unique_words
+
+
+    def make_matrix_vector(self, labeled_data, unique_words):
+        # Частотное кодирование для классификаторов scikit-learn
+        # Разреженная матрица для признаков
+        print(len(labeled_data))
+        print(len(unique_words))
+        matrix_vec = csr_matrix((len(labeled_data), len(unique_words)), dtype=np.int8).toarray()
+        # Массив для меток классов
+        target = np.zeros(len(labeled_data), 'str')
+        for index_doc, document in enumerate(labeled_data):
+            for index_word, word in enumerate(unique_words):
+                # Подсчет кол-ва вхождения слова в отзыв
+                matrix_vec[index_doc, index_word] = document[0].count(word)
+            target[index_doc] = document[1]
+        print(len(matrix_vec))
+        print(len(target))
+        # Перемешиваем датасет
+        self.X, self.Y = shuffle(matrix_vec, target)
+        return (self.X, self.Y)
+
+class Preproccesing:
+
+    def __init__(self):
+        self.data = {'Word_matrix': None, 'All_words': None}
+        self.label = {}
+
+    """Функция для извлечения данных из файла. Первый аргумент - путь к файлу на комьютере. Второй аргумент - название стобца, где хранятся данные
+       Функция возвращает список из комментариев, который далее передается в функцию parts_speech_tag"""
+
+    def get_data_file(self, path_file_data, column_name):
+        file_path = (path_file_data)
+        file_data = pd.read_excel(file_path)  
+        result_data = file_data[column_name]
+        return list(result_data)
+
+    def parts_speech_tag(self, commentaries):
+        lst_parts_speech = []
+        for comment in commentaries:
+          if type(comment) == str:
+                lst_parts_speech.append(pos_tag(comment.split(), lang="rus"))
+        return lst_parts_speech
+
+    def make_all_words(self, lst_parts_speech):
+        lst = ['S', 'A=m', 'V', 'ADV', 'A=f', 'A=n']
+        self.lst_key_words = []
+        for i in [j[0].lower().strip('?!#$%&()*+,-./:;<=>@[\]^_`{|}~') for i in lst_parts_speech for j in i if j[1] in lst]:
+            self.lst_key_words.append(i)
+        return " ".join(self.lst_key_words)
+
+    def make_words_matrix(self, lst_parts_speech):
+        lst_check = ['S', 'A=m', 'V', 'ADV', 'A=f', 'A=n']
+        lst_words_matrix = [[tuple_parts_speech[0].lower().strip('?!#$%&()*+,-./:;<=>@[\]^_`{|}~') for tuple_parts_speech in filter(lambda check_symbol: check_symbol[1] in lst_check, lst_comment)] for lst_comment in lst_parts_speech]
+        return lst_words_matrix
+
+    def lemmatization_all_words(self, lst_key_words):
+        m = Mystem()
+        lemmatized_all_words = m.lemmatize(lst_key_words)
+        lemmatized_all_words = [i for i in lemmatized_all_words if i.isalpha()]
+        return lemmatized_all_words
+
+    def lemmatization_matrix_words(self, lst_word_matrix):
+        m = Mystem()
+        lemmatized_matrix_words = [[j for j in m.lemmatize(" ".join(i)) if j.isalpha()] for i in lst_word_matrix]
+        return lemmatized_matrix_words
+
+    def add_bigrams(self, lemmatized_matrix_words):
+        lemmatized_matrix_bigr = [list(bigrams(i)) + i for i in lemmatized_matrix_words]
+        return lemmatized_matrix_bigr
+
+    def make_dict(self,lemmatized_all_words, lemmatized_matrix_words, label=None):
+        self.data["Word_matrix"] = lemmatized_matrix_words
+        self.data["All_words"] = lemmatized_all_words
+        self.label[label] = self.data
+        return self.label
+
+    """Магический метод __call__ для, по сути, превращения объекта класса Preproccesing в функцию (что-то вроде декоратора). Таким образом, можно просто один раз передать данные, чтобы они обрабатывались"""
+    
+    def __call__(self, data, label_dct=None, *args, **kwargs):
+      
+        s = Preproccesing()
+        splited_part_speech = s.parts_speech_tag(data)
+        key_wrd_matix = s.make_words_matrix(splited_part_speech)
+        lemm_matrix_words = s.lemmatization_matrix_words(key_wrd_matix)
+        bigrams_key_matrix = s.add_bigrams(lemm_matrix_words)
+        key_all_wrds = s.make_all_words(splited_part_speech)
+        lemm_key_all_wrds = s.lemmatization_all_words(key_all_wrds)
+        result_dict = s.make_dict(lemm_key_all_wrds, bigrams_key_matrix, label=label_dct)
+        return result_dict
+     
+
+
+"""сюда добавляем ссылку на файл-эксель с данными, потом к ним последовательно применяются функции сначала из класса Preproccesing, потом из класса Vectorization (для этого и нужен __call__). 
+На выходе получается словарь"""
+
+full_dct = {}
+labels = ['good', 'neutral', 'bad']
+for i in range(len(labels)):
+     prep = Preproccesing()
+     name_file = f'For_test{i+1}.xlsx'
+     data = prep.get_data_file(name_file, 'comments') 
+     dct = prep(data, labels[i])
+     full_dct[labels[i]] = dct[labels[i]]
+
+"""Здесь данный словарь обрабатывается и превращается в числовую матрицу, на которой будет обучаться наша программа/модель/алгоритм"""
+
+vector = Vectorization()
+make_labeled_data =  vector.labeled_data(full_dct)
+make_result_dict = vector.unique_words(full_dct)
+final_matrix = vector.make_matrix_vector(make_labeled_data, make_result_dict)
+X, Y = final_matrix[0], final_matrix[1]
+
+"""На основе матрицы обучаем наш алгоритм"""
+
+parameter = [1, 0, 0.1, 0.01, 0.001, 0.0001]
+param_grid = {'alpha': parameter}
+grid_search = GridSearchCV(MultinomialNB(), param_grid, cv=5)
+grid_search.fit(X, Y)
+Alpha, best_score = grid_search.best_params_, grid_search.best_score_
+model = MultinomialNB()
+model.fit(X, Y)
+
+
+"""Тестим что получилось, но сначала создаем X_control и Y_control"""
+
+full_dct_control = {}
+labels = ['good', 'neutral', 'bad']
+for i in range(len(labels)):
+     prep = Preproccesing()
+     name_file = f'For_control{i+1}.xlsx'
+     data_control = prep.get_data_file(name_file, 'comments') 
+     dct_control = prep(data_control, labels[i])
+     full_dct_control[labels[i]] = dct_control[labels[i]]
+
+
+vector_control = Vectorization()
+make_labeled_data_control =  vector_control.labeled_data(full_dct_control)
+make_result_dict_control = vector_control.unique_words(full_dct_control)
+final_matrix_control = vector_control.make_matrix_vector(make_labeled_data_control, make_result_dict)
+
+X_control, Y_control = final_matrix_control[0], final_matrix_control[1]
+
+
+predicted = model.predict(X_control)
+# Точность на контрольном датасете
+score_test = accuracy_score(Y_control, predicted)
+print(score_test)
+# Классификационный отчет
+report = classification_report(Y_control, predicted)
+print(report)
+
+plt.plot(report)
+plt.grid(True)
+plt.show()
